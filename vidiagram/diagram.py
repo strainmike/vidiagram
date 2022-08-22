@@ -52,6 +52,12 @@ def node_to_object(node):
         return Parameter(node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__overridableParm:
         return Output(node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__bDConstDCO:
+        return Constant(node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__lTst:
+        return LoopTest(node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__lCnt:
+        return LoopCount(node)
 
     else:
         raise node
@@ -107,6 +113,11 @@ class Node:
         for terminal in iterate_direct_children(terminal_list):
             # print("Parsing termlist: " + str(terminal))
             self._terminals.append(node_to_object_and_uuid_dict(terminal))
+        bounds = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__bounds)
+
+        if bounds:
+            self.x = (bounds.right + bounds.left) / 2
+            self.y = (bounds.top + bounds.bottom) / 2
 
     def resolve_weak_nodes(self):
         # print("resolve: " + str(self))
@@ -114,20 +125,20 @@ class Node:
             if isinstance(terminal, WeakNode):
                 self._terminals[index] = node_to_object_and_uuid_dict(terminal._node)
         for terminal in self._terminals:
-            # print("asldkalsdkaldkadlkadkalkdaAAAAAAAAAAAAAAAAAAA")
-            # print(terminal)
             terminal.resolve_weak_nodes()
 
     def fill_graph(self, graph, namespace):
-        graph.node(name=str(self._uuid), label=type(self).__name__)
+        graph.node(name=str(self._uuid), label=type(self).__name__, pos=f"{int(self.x)},{int(self.y)}")
         self.fill_terminals(graph, namespace)
 
     def fill_terminals(self, graph, namespace):
-        # print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        # print(self._uuid)
         for terminal in self._terminals:
             # print(terminal._uuid)
             if isinstance(terminal, FPTerminal):
+                terminal.fill_graph(graph, namespace)
+            elif isinstance(terminal._impl, Constant) \
+                or isinstance(terminal._impl, LoopCount) \
+                or isinstance(terminal._impl, LoopTest):
                 terminal.fill_graph(graph, namespace)
             elif isinstance(terminal._impl, Parameter):
                 signals[terminal._uuid] = self._uuid
@@ -144,8 +155,6 @@ class Node:
             elif isinstance(terminal._impl, LoopTunnel):
                 source = terminal._impl._source
                 dest = terminal._impl._dest
-
-
 
 
 
@@ -196,8 +205,8 @@ class Terminal(Node):
         if isinstance(self._impl, WeakNode):
             self._impl = node_to_object_and_uuid_dict(self._impl._node)
 
-    # def fill_graph(self, graph, namespace):
-        # raise "why am i here"
+    def fill_graph(self, graph, namespace):
+        self._impl.fill_graph(graph, namespace, self)
 
     def __str__(self):
         return "Terminal"
@@ -208,7 +217,7 @@ class LoopTunnel(Node):
     def __init__(self, node):
         super().__init__(node)
         connected_terminals = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
-        print(connected_terminals)
+        # print(connected_terminals)
         iterator = iterate_direct_children(connected_terminals)
         source = next(iterator)
         source_uuid = source.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
@@ -223,6 +232,21 @@ class Parameter(Node):
         super().__init__(node)
 
 class Output(Node):
+    def __init__(self, node):
+        super().__init__(node)
+
+
+class TerminalClass(Node):
+    def fill_graph(self, graph, namespace, parent):
+        graph.node(name=str(parent._uuid), label=type(self).__name__)
+        source = get_source(parent._uuid)
+        dest = get_dest(parent._uuid)
+        if source != dest:
+            signals_to_draw[source] = dest
+
+
+
+class Constant(TerminalClass):
     def __init__(self, node):
         super().__init__(node)
 
@@ -266,7 +290,23 @@ class Structure(Node):
     __repr__ = __str__
 
 
-class Loop(Structure): pass
+class LoopTest(TerminalClass):
+    def __init__(self, node):
+        super().__init__(node)
+
+class LoopCount(TerminalClass):
+    def __init__(self, node):
+        super().__init__(node)
+
+
+class Loop(Structure):
+    def __init__(self, node):
+        super().__init__(node)
+        self._loopIndex = node_to_object_and_uuid_dict(node.findChild(LVheap.OBJ_FIELD_TAGS.OF__loopIndexDCO))
+        self._loopTest = node_to_object_and_uuid_dict(node.findChild(LVheap.OBJ_FIELD_TAGS.OF__loopTestDCO))
+
+
+
 class WhileLoop(Loop): pass
 class ForLoop(Loop): pass
 
@@ -333,6 +373,7 @@ class Diagram(Node):
 def add_wires(graph):
     for key,value in signals_to_draw.items():
         graph.edge(str(key), str(value))
+
 
 class TestDiagram(unittest.TestCase):
     def test_parse_diagram(self):
