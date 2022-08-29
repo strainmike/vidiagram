@@ -88,17 +88,23 @@ class WeakNode:
     __repr__ = __str__
 
 
+def add_signal(signal_map, source, dest):
+    if source not in signal_map:
+        signal_map[source] = set()
+    signal_map[source].add(dest)
+
 def get_source(uuid):
-    for source, dest in signals.items():
-        if dest == uuid:
-            uuid = source
-            return get_source(uuid)
+    for source, dests in signals.items():
+        for dest in dests:
+            if dest == uuid:
+                uuid = source
+                return get_source(uuid)
     return uuid
 
 
 def get_dest(uuid):
-    if uuid in signals:
-        uuid = signals[uuid]
+    if uuid in signals and len(signals[uuid]) == 1:
+        uuid = signals[uuid].pop()
         return get_dest(uuid)
     return uuid
 
@@ -141,17 +147,18 @@ class Node:
                 or isinstance(terminal._impl, LoopTest):
                 terminal.fill_graph(graph, namespace)
             elif isinstance(terminal._impl, Parameter):
-                signals[terminal._uuid] = self._uuid
+                add_signal(signals, terminal._uuid, self._uuid)
                 source = terminal._uuid
                 dest = self._uuid
                 source = get_source(source)
-                signals_to_draw[source] = dest
+                add_signal(signals_to_draw, source, dest)
             elif isinstance(terminal._impl, Output):
-                signals[self._uuid] = signals[terminal._uuid]
+                for dest in signals[terminal._uuid]:
+                    add_signal(signals, self._uuid, dest)
                 dest = terminal._uuid
                 dest = get_dest(dest)
                 source = self._uuid
-                signals_to_draw[source] = dest
+                add_signal(signals_to_draw, source, dest)
             elif isinstance(terminal._impl, LoopTunnel):
                 source = terminal._impl._source
                 dest = terminal._impl._dest
@@ -222,8 +229,8 @@ class LoopTunnel(Node):
         source = next(iterator)
         source_uuid = source.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
         for terminal in iterator:
-            signals[source_uuid] = terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
-            signals[terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]] = source_uuid
+            add_signal(signals, source_uuid, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value])
+            add_signal(signals, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value], source_uuid)
         self._source = source_uuid
         self._dest = terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
 
@@ -242,7 +249,7 @@ class TerminalClass(Node):
         source = get_source(parent._uuid)
         dest = get_dest(parent._uuid)
         if source != dest:
-            signals_to_draw[source] = dest
+            add_signal(signals_to_draw, source, dest)
 
 
 
@@ -346,7 +353,7 @@ class Diagram(Node):
             source = next(iterator)
             source_uuid = source.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
             for terminal in iterator:
-                signals[source_uuid] = terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
+                add_signal(signals, source_uuid, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value])
 
     def resolve_weak_nodes(self):
         super().resolve_weak_nodes()
@@ -371,8 +378,9 @@ class Diagram(Node):
     __repr__ = __str__
 
 def add_wires(graph):
-    for key,value in signals_to_draw.items():
-        graph.edge(str(key), str(value))
+    for source, dests in signals_to_draw.items():
+        for dest in dests:
+            graph.edge(str(source), str(dest))
 
 
 class TestDiagram(unittest.TestCase):
