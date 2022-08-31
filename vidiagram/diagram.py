@@ -58,9 +58,11 @@ def node_to_object(node):
         return LoopTest(node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__lCnt:
         return LoopCount(node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__label:
+        return Label(node)
 
     else:
-        raise node
+        # raise node
         return UnknownNode(node)
 
 def node_to_object_and_uuid_dict(node):
@@ -134,6 +136,7 @@ class Node:
         self._uuid = node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
         self._terminals = []
         self._resolved_weaknodes = False
+        self._color = None
 
         terminal_list = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
         for terminal in iterate_direct_children(terminal_list):
@@ -169,7 +172,7 @@ class Node:
         # if no or 1 terminal, maybe just make it a node
         if len(self._terminals) > 0:
             with graph.subgraph(name=self.name) as subgraph:
-                subgraph.attr(label=type(self).__name__)
+                subgraph.attr(label=type(self).__name__, color=self._color, style="filled")
                 for terminal in self._terminals:
                 # name = f"<{str(terminal._uuid)}> Terminal"
                 # struct_info += name + " | "
@@ -182,12 +185,28 @@ class Node:
 class UnknownNode(Node):
     def __init__(self, node):
         super().__init__(node)
+        print(f"Unknown {get_class_type(node)}")
 
     def __str__(self):
         return "UnknownNode"
 
+    def set_parent(self, parent):
+        self._parent = parent
+
     __repr__ = __str__
 
+
+class Label(Node):
+    def __init__(self, node):
+        super().__init__(node)
+        textrec = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__textRec)
+        print(textrec)
+        text = textrec.findChild(LVheap.OBJ_TEXT_HAIR_TAGS.OF__text)
+        self._label = text.content.decode("cp1252")
+        
+    
+    def fill_graph(self, graph, namespace):
+        graph.node(name=self.name, label=self._label, color="lightyellow", style="filled")
 
 class FPTerminal(Node):
     def __init__(self, node):
@@ -320,6 +339,7 @@ class Primitive(Node):
     def __init__(self, node):
         super().__init__(node)
         self._primitive_id = node.attribs[LVheap.SL_SYSTEM_TAGS.SL__object.value]
+        self._color = "lightyellow"
 
     def __str__(self):
         return "Primitive ID: " + str(self._primitive_id)
