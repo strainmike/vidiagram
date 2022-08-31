@@ -81,9 +81,10 @@ class WeakNode:
     # needs reinserted later to resolve the full node
     def __init__(self, node):
         self._node = node
+        self._uuid = node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
 
     def __str__(self):
-        return "WeakNode" + str(self._node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value])
+        return "WeakNode" + str(self._uuid)
 
     __repr__ = __str__
 
@@ -103,10 +104,28 @@ def get_source(uuid):
 
 
 def get_dest(uuid):
-    if uuid in signals and len(signals[uuid]) == 1:
-        uuid = signals[uuid].pop()
-        return get_dest(uuid)
-    return uuid
+    if uuid in signals:
+        for dest in signals[uuid]:
+            yield from get_dest(dest)
+    else:
+        yield uuid
+
+
+class Signal:
+    def __init__(self, terminal_list):
+        self._terminals = []
+        for terminal in iterate_direct_children(terminal_list):
+            uuid = terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
+            self._terminals.append(uuid)
+            node_to_object_and_uuid_dict(terminal) # in case any actual objects show up here instead of just references, resolve them, not sure if this is possible
+
+    def fill_graph(self, graph, namespace):
+        if not self._terminals or len(self._terminals) == 1:
+            return
+        iterator = iter(self._terminals)
+        source = next(iterator)
+        for dest in iterator:
+            graph.edge(uuid_dict[source].name, uuid_dict[dest].name)
 
 
 class Node:
@@ -114,6 +133,7 @@ class Node:
         self._node = node
         self._uuid = node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
         self._terminals = []
+        self._resolved_weaknodes = False
 
         terminal_list = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
         for terminal in iterate_direct_children(terminal_list):
@@ -126,43 +146,37 @@ class Node:
             self.y = (bounds.top + bounds.bottom) / 2
 
     def resolve_weak_nodes(self):
-        # print("resolve: " + str(self))
+        if self._resolved_weaknodes:
+            return
+        print("resolve: " + str(self))
         for index, terminal in enumerate(self._terminals):
             if isinstance(terminal, WeakNode):
+                print("resolving: " + str(terminal))
                 self._terminals[index] = node_to_object_and_uuid_dict(terminal._node)
         for terminal in self._terminals:
             terminal.resolve_weak_nodes()
+            terminal.set_parent(self)
+        self._resolved_weaknodes = True
+
+    @property
+    def name(self):
+        if len(self._terminals) > 0:
+            return "cluster" + str(self._uuid)
+        return str(self._uuid)
 
     def fill_graph(self, graph, namespace):
-        graph.node(name=str(self._uuid), label=type(self).__name__, pos=f"{int(self.x)},{int(self.y)}")
-        self.fill_terminals(graph, namespace)
-
-    def fill_terminals(self, graph, namespace):
-        for terminal in self._terminals:
-            # print(terminal._uuid)
-            if isinstance(terminal, FPTerminal):
-                terminal.fill_graph(graph, namespace)
-            elif isinstance(terminal._impl, Constant) \
-                or isinstance(terminal._impl, LoopCount) \
-                or isinstance(terminal._impl, LoopTest):
-                terminal.fill_graph(graph, namespace)
-            elif isinstance(terminal._impl, Parameter):
-                add_signal(signals, terminal._uuid, self._uuid)
-                source = terminal._uuid
-                dest = self._uuid
-                source = get_source(source)
-                add_signal(signals_to_draw, source, dest)
-            elif isinstance(terminal._impl, Output):
-                for dest in signals[terminal._uuid]:
-                    add_signal(signals, self._uuid, dest)
-                dest = terminal._uuid
-                dest = get_dest(dest)
-                source = self._uuid
-                add_signal(signals_to_draw, source, dest)
-            elif isinstance(terminal._impl, LoopTunnel):
-                source = terminal._impl._source
-                dest = terminal._impl._dest
-
+        struct_info = ""
+        # if no or 1 terminal, maybe just make it a node
+        if len(self._terminals) > 0:
+            with graph.subgraph(name=self.name) as subgraph:
+                subgraph.attr(label=type(self).__name__)
+                for terminal in self._terminals:
+                # name = f"<{str(terminal._uuid)}> Terminal"
+                # struct_info += name + " | "
+                    print(terminal)
+                    terminal.fill_graph(subgraph, namespace)
+        else:
+            graph.node(name=self.name, label=type(self).__name__)
 
 
 class UnknownNode(Node):
@@ -175,22 +189,15 @@ class UnknownNode(Node):
     __repr__ = __str__
 
 
-class Constant(Node):
-    def __init__(self, node):
-        super().__init__(node)
-
-    def __str__(self):
-        return "Constant"
-
-    __repr__ = __str__
-
-
 class FPTerminal(Node):
     def __init__(self, node):
         super().__init__(node)
 
     def __str__(self):
         return "FPTerminal"
+
+    def set_parent(self, parent):
+        self._parent = parent
 
     __repr__ = __str__
 
@@ -205,15 +212,36 @@ class Terminal(Node):
         subclass = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__dco)
         # print("Terminal: "+str(self._uuid))
         self._impl = node_to_object_and_uuid_dict(subclass)
+        self._parent = None
 
     def resolve_weak_nodes(self):
+        if self._resolved_weaknodes:
+            return
         # print("resolve terminals")
         super().resolve_weak_nodes()
         if isinstance(self._impl, WeakNode):
             self._impl = node_to_object_and_uuid_dict(self._impl._node)
+        self._impl.resolve_weak_nodes() # TODO why does this recurse forever
+        self._impl.set_parent(self)
+
+    def set_parent(self, parent):
+        # if self._parent and self._parent is not parent:
+            # print(f"parent: {parent} self._parent {self._parent}")
+            # raise "Wtf"
+        self._parent = parent
 
     def fill_graph(self, graph, namespace):
-        self._impl.fill_graph(graph, namespace, self)
+        # graph.node(name=self.name, label=type(self._impl).__name__)
+        print(self._impl)
+        self._impl.fill_graph(graph, namespace)
+
+    @property
+    def is_input(self):
+        return not isinstance(terminal._impl, Output)
+
+    @property
+    def name(self):
+        return str(self._uuid)
 
     def __str__(self):
         return "Terminal"
@@ -223,37 +251,68 @@ class Terminal(Node):
 class LoopTunnel(Node):
     def __init__(self, node):
         super().__init__(node)
-        connected_terminals = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
-        # print(connected_terminals)
-        iterator = iterate_direct_children(connected_terminals)
-        source = next(iterator)
-        source_uuid = source.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
-        for terminal in iterator:
-            add_signal(signals, source_uuid, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value])
-            add_signal(signals, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value], source_uuid)
-        self._source = source_uuid
-        self._dest = terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
+        # connected_terminals = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
+        # iterator = iterate_direct_children(connected_terminals)
+        # source = next(iterator)
+        # source_uuid = source.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
+        # for terminal in iterator:
+            # add_signal(signals, source_uuid, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value])
+            # add_signal(signals, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value], source_uuid)
+        # self._source = source_uuid
+        # self._dest = terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
+        # breakpoint()
 
-class Parameter(Node):
-    def __init__(self, node):
-        super().__init__(node)
+    def set_parent(self, parent):
+        self._parent = parent
+        # for some reason, looptunnels are owned by a terminal, they own
+            # <SL__arrayElement class="term" uid="307">
+            # <objFlags>2129984</objFlags>
+            # <dco class="lpTun" uid="304">
+              # <objFlags>2048</objFlags>
+              # <termList elements="2">
+                # <SL__arrayElement uid="306" />
+                # <SL__arrayElement uid="307" />
+                # </termList>
+              # </dco>
+            # </SL__arrayElement>
+        # look at 306, so to prevent recursion problems, ignore our parent
+        # self._terminals.remove(parent)
+        print(self._terminals)
 
-class Output(Node):
-    def __init__(self, node):
-        super().__init__(node)
+    def fill_graph(self, graph, namespace):
+        struct_info = ""
+        # if no or 1 terminal, maybe just make it a node
+        if len(self._terminals) > 0:
+            with graph.subgraph(name=self.name) as subgraph:
+                subgraph.attr(label=type(self).__name__)
+                for terminal in self._terminals:
+                # name = f"<{str(terminal._uuid)}> Terminal"
+                # struct_info += name + " | "
+                    print(terminal)
+                    subgraph.node(name=terminal.name, label=type(terminal).__name__)
+        else:
+            graph.node(name=self.name, label=type(self).__name__)
 
 
 class TerminalClass(Node):
-    def fill_graph(self, graph, namespace, parent):
-        graph.node(name=str(parent._uuid), label=type(self).__name__)
-        source = get_source(parent._uuid)
-        dest = get_dest(parent._uuid)
-        if source != dest:
-            add_signal(signals_to_draw, source, dest)
+    def __init__(self, node):
+        super().__init__(node)
 
+    def fill_graph(self, graph, namespace):
+        graph.node(name=self._parent.name, label=type(self).__name__)
 
+    def set_parent(self, parent):
+        self._parent = parent
 
 class Constant(TerminalClass):
+    def __init__(self, node):
+        super().__init__(node)
+
+class Parameter(TerminalClass):
+    def __init__(self, node):
+        super().__init__(node)
+
+class Output(TerminalClass):
     def __init__(self, node):
         super().__init__(node)
 
@@ -282,11 +341,12 @@ class Structure(Node):
             subgraph.attr(label=type(self).__name__)
             for diagram in self._diagrams:
                 diagram.fill_graph(subgraph, namespace)
-            self.fill_terminals(graph, namespace)
-            # for terminal in self._terminals:
-                # terminal.fill_graph(subgraph, namespace)
+            for terminal in self._terminals:
+                terminal.fill_graph(subgraph, namespace)
 
     def resolve_weak_nodes(self):
+        if self._resolved_weaknodes:
+            return
         super().resolve_weak_nodes()
         for diagram in self._diagrams:
             diagram.resolve_weak_nodes()
@@ -330,6 +390,7 @@ class Diagram(Node):
         super().__init__(node)
         self._nodes = []
         self._terminals = []
+        self._signals = []
 
         nodelist = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__nodeList)
         for nodelist_item in iterate_direct_children(nodelist):
@@ -348,12 +409,7 @@ class Diagram(Node):
         signallist = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__signalList)
         for signal in iterate_direct_children(signallist):
             connected_terminals = signal.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
-            # print(connected_terminals)
-            iterator = iterate_direct_children(connected_terminals)
-            source = next(iterator)
-            source_uuid = source.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
-            for terminal in iterator:
-                add_signal(signals, source_uuid, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value])
+            self._signals.append(Signal(connected_terminals))
 
     def resolve_weak_nodes(self):
         super().resolve_weak_nodes()
@@ -364,11 +420,12 @@ class Diagram(Node):
             node.resolve_weak_nodes()
 
     def fill_graph(self, graph, namespace=""):
-        with graph.subgraph(name="cluster" + str(self._uuid)) as subgraph:
+        for signal in self._signals:
+            signal.fill_graph(graph, namespace)
+        with graph.subgraph(name="cluster" + str(self._uuid), node_attr={"shape": "record"}) as subgraph:
             subgraph.attr(label=type(self).__name__)
             for node in self._nodes:
                 node.fill_graph(subgraph, namespace)
-            self.fill_terminals(graph, namespace)
             # for terminal in self._terminals:
                 # terminal.fill_graph(subgraph, namespace)
 
@@ -377,10 +434,6 @@ class Diagram(Node):
 
     __repr__ = __str__
 
-def add_wires(graph):
-    for source, dests in signals_to_draw.items():
-        for dest in dests:
-            graph.edge(str(source), str(dest))
 
 
 class TestDiagram(unittest.TestCase):
@@ -396,10 +449,9 @@ class TestDiagram(unittest.TestCase):
                     diagram.resolve_weak_nodes()
                     # print(diagram)
                     # pprint(uuid_dict)
-                    # pprint(signals)
-                    g = graphviz.Digraph('G', engine='dot')
+                    pprint(signals)
+                    g = graphviz.Digraph('G', engine='dot', node_attr={"shape": "record"})
                     diagram.fill_graph(g)
-                    add_wires(g)
                     # g.view()
                     # print(g.source)
             # breakpoint()
@@ -415,13 +467,12 @@ def get_dot_graph(file):
                 diagram = node_to_object_and_uuid_dict(root)
                 diagram.resolve_weak_nodes()
                 print(diagram)
-                # pprint(uuid_dict)
-                # pprint(signals)
-                g = graphviz.Digraph('G', engine='dot', format="svg")
+                pprint(uuid_dict)
+                pprint(signals)
+                g = graphviz.Digraph('G', engine='dot', format="svg", node_attr={"shape": "record"})
                 diagram.fill_graph(g)
-                add_wires(g)
+                print(g.source)
                 return g
-                # print(g.source)
 
 import argparse
 
