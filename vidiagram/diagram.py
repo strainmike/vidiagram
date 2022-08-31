@@ -8,8 +8,6 @@ import graphviz
 this_dir = os.path.dirname(os.path.realpath(__file__))
 
 uuid_dict = {}
-signals = {}
-signals_to_draw = {}
 
 from pylabview import LVheap
 def get_class_type(node):
@@ -90,29 +88,6 @@ class WeakNode:
 
     __repr__ = __str__
 
-
-def add_signal(signal_map, source, dest):
-    if source not in signal_map:
-        signal_map[source] = set()
-    signal_map[source].add(dest)
-
-def get_source(uuid):
-    for source, dests in signals.items():
-        for dest in dests:
-            if dest == uuid:
-                uuid = source
-                return get_source(uuid)
-    return uuid
-
-
-def get_dest(uuid):
-    if uuid in signals:
-        for dest in signals[uuid]:
-            yield from get_dest(dest)
-    else:
-        yield uuid
-
-
 class Signal:
     def __init__(self, terminal_list):
         self._terminals = []
@@ -137,6 +112,7 @@ class Node:
         self._terminals = []
         self._resolved_weaknodes = False
         self._color = None
+        self._style = None
 
         terminal_list = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
         for terminal in iterate_direct_children(terminal_list):
@@ -167,19 +143,23 @@ class Node:
             return "cluster" + str(self._uuid)
         return str(self._uuid)
 
+    @property
+    def label(self):
+        return type(self).__name__
+
     def fill_graph(self, graph, namespace):
         struct_info = ""
         # if no or 1 terminal, maybe just make it a node
         if len(self._terminals) > 0:
             with graph.subgraph(name=self.name) as subgraph:
-                subgraph.attr(label=type(self).__name__, color=self._color, style="filled")
+                subgraph.attr(label=self.label, color=self._color, style="filled")
                 for terminal in self._terminals:
                 # name = f"<{str(terminal._uuid)}> Terminal"
                 # struct_info += name + " | "
                     print(terminal)
                     terminal.fill_graph(subgraph, namespace)
         else:
-            graph.node(name=self.name, label=type(self).__name__)
+            graph.node(name=self.name, label=self.label, color=self._color, style=self._style)
 
 
 class UnknownNode(Node):
@@ -203,10 +183,12 @@ class Label(Node):
         print(textrec)
         text = textrec.findChild(LVheap.OBJ_TEXT_HAIR_TAGS.OF__text)
         self._label = text.content.decode("cp1252")
-        
-    
-    def fill_graph(self, graph, namespace):
-        graph.node(name=self.name, label=self._label, color="lightyellow", style="filled")
+        self._color = "lightyellow"
+        self._style = "filled"
+
+    @property
+    def label(self):
+        return self._label
 
 class FPTerminal(Node):
     def __init__(self, node):
@@ -219,11 +201,6 @@ class FPTerminal(Node):
         self._parent = parent
 
     __repr__ = __str__
-
-
-# TODO, redo how we do signals
-# Nodes should keep track of their own signals and resolve them themselves
-# That enables fancier edge stuff
 
 class Terminal(Node):
     def __init__(self, node):
@@ -270,16 +247,6 @@ class Terminal(Node):
 class LoopTunnel(Node):
     def __init__(self, node):
         super().__init__(node)
-        # connected_terminals = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
-        # iterator = iterate_direct_children(connected_terminals)
-        # source = next(iterator)
-        # source_uuid = source.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
-        # for terminal in iterator:
-            # add_signal(signals, source_uuid, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value])
-            # add_signal(signals, terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value], source_uuid)
-        # self._source = source_uuid
-        # self._dest = terminal.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
-        # breakpoint()
 
     def set_parent(self, parent):
         self._parent = parent
@@ -469,7 +436,6 @@ class TestDiagram(unittest.TestCase):
                     diagram.resolve_weak_nodes()
                     # print(diagram)
                     # pprint(uuid_dict)
-                    pprint(signals)
                     g = graphviz.Digraph('G', engine='dot', node_attr={"shape": "record"})
                     diagram.fill_graph(g)
                     # g.view()
@@ -488,7 +454,6 @@ def get_dot_graph(file):
                 diagram.resolve_weak_nodes()
                 print(diagram)
                 pprint(uuid_dict)
-                pprint(signals)
                 g = graphviz.Digraph('G', engine='dot', format="svg", node_attr={"shape": "record"})
                 diagram.fill_graph(g)
                 print(g.source)
