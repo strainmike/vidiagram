@@ -13,7 +13,7 @@ def get_class_type(node):
         return node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__class.value]
     return None
 
-def node_to_object(uuid_manager, node):
+def _node_to_object(uuid_manager, node):
     class_type = get_class_type(node)
     # print(class_type)
     if class_type is None and LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value in node.attribs:
@@ -63,16 +63,13 @@ class UUIDManager:
     def node_to_object(self, node):
         if node.getScopeInfo() is LVheap.NODE_SCOPE.TagClose:
             return
-        if LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value in node.attribs:
-            uuid = node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
-            # print(uuid)
-            if uuid in self._uuids_to_obj:
-                return self._uuids_to_obj[uuid]
-            else:
-                print(uuid)
-                return node_to_object(self, self._uuids_to_nodes[uuid])
-
-        graph_node = node_to_object(self, node)
+        if LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value not in node.attribs:
+            raise RuntimeError("No UUID")
+        uuid = node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
+        # print(uuid)
+        if uuid in self._uuids_to_obj:
+            return self._uuids_to_obj[uuid]
+        graph_node = _node_to_object(self, self._uuids_to_nodes[uuid])
         if not isinstance(graph_node, WeakNode) and LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value in node.attribs:
             self._uuids_to_obj[uuid] = graph_node
         return graph_node
@@ -83,6 +80,8 @@ class UUIDManager:
 
 class WeakNode:
     # needs reinserted later to resolve the full node
+    # VIs can have circular references within nodes, so need
+    # to lazy initialize
     def __init__(self, node):
         self._node = node
         self._uuid = node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
@@ -115,7 +114,6 @@ class Node:
         self._node = node
         self._uuid = node.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__uid.value]
         self._terminals = []
-        self._resolved_weaknodes = False
         self._color = None
         self._style = None
         self.uuid_manager = uuid_manager
@@ -127,7 +125,6 @@ class Node:
 
         terminal_list = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__termList)
         for terminal in iterate_direct_children(terminal_list):
-            # print("Parsing termlist: " + str(terminal))
             self._terminals.append(WeakNode(terminal))
         bounds = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__bounds)
 
@@ -136,22 +133,14 @@ class Node:
             self.y = (bounds.top + bounds.bottom) / 2
 
     def resolve_weak_nodes(self):
-        if self._resolved_weaknodes:
-            return
-        self._resolved_weaknodes = True
-        print("resolve: " + str(self))
         for index, terminal in enumerate(self._terminals):
             if isinstance(terminal, WeakNode):
-                print("resolving: " + str(terminal))
                 self._terminals[index] = self.uuid_manager.node_to_object(terminal._node)
         for terminal in self._terminals:
-            terminal.resolve_weak_nodes()
             terminal.set_parent(self)
         if self._impl:
             if isinstance(self._impl, WeakNode):
                 self._impl = self.uuid_manager.node_to_object(self._impl._node)
-            if not isinstance(self._impl, WeakNode):
-                self._impl.resolve_weak_nodes()
                 self._impl.set_parent(self)
 
     @property
@@ -165,15 +154,10 @@ class Node:
         return type(self).__name__
 
     def fill_graph(self, graph, namespace):
-        struct_info = ""
-        # if no or 1 terminal, maybe just make it a node
         if len(self._terminals) > 0:
             with graph.subgraph(name=self.name) as subgraph:
                 subgraph.attr(label=self.label, fillcolor=self._color, style="filled,solid")
                 for terminal in self._terminals:
-                # name = f"<{str(terminal._uuid)}> Terminal"
-                # struct_info += name + " | "
-                    print(terminal)
                     terminal.fill_graph(subgraph, namespace)
         else:
             graph.node(name=self.name, label=self.label, fillcolor=self._color, style=self._style)
@@ -197,8 +181,6 @@ class Label(Node):
     def __init__(self, uuid_manager, node):
         super().__init__(uuid_manager, node)
         textrec = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__textRec)
-        print(textrec)
-        print(self._uuid)
         text = textrec.findChild(LVheap.OBJ_TEXT_HAIR_TAGS.OF__text)
         if text:
             self._label = text.content.decode("cp1252")
@@ -234,7 +216,6 @@ class Terminal(Node):
 
     def fill_graph(self, graph, namespace):
         # graph.node(name=self.name, label=type(self._impl).__name__)
-        print(self._impl)
         self._impl.fill_graph(graph, namespace)
 
     @property
@@ -256,20 +237,6 @@ class LoopTunnel(Node):
 
     def set_parent(self, parent):
         self._parent = parent
-        # for some reason, looptunnels are owned by a terminal, they own
-            # <SL__arrayElement class="term" uid="307">
-            # <objFlags>2129984</objFlags>
-            # <dco class="lpTun" uid="304">
-              # <objFlags>2048</objFlags>
-              # <termList elements="2">
-                # <SL__arrayElement uid="306" />
-                # <SL__arrayElement uid="307" />
-                # </termList>
-              # </dco>
-            # </SL__arrayElement>
-        # look at 306, so to prevent recursion problems, ignore our parent
-        # self._terminals.remove(parent)
-        print(self._terminals)
 
     def fill_graph(self, graph, namespace):
         struct_info = ""
@@ -337,13 +304,6 @@ class Structure(Node):
             for terminal in self._terminals:
                 terminal.fill_graph(subgraph, namespace)
 
-    def resolve_weak_nodes(self):
-        if self._resolved_weaknodes:
-            return
-        super().resolve_weak_nodes()
-        for diagram in self._diagrams:
-            diagram.resolve_weak_nodes()
-
     def __str__(self):
         return type(self).__name__ + ":" + str(self._diagrams)
 
@@ -409,8 +369,6 @@ class Diagram(Node):
         for index, node in enumerate(self._nodes):
             if isinstance(node, WeakNode):
                 self._nodes[index] = self.uuid_manager.node_to_object(node._node)
-        for node in self._nodes:
-            node.resolve_weak_nodes()
 
     def fill_graph(self, graph, namespace=""):
         for signal in self._signals:
