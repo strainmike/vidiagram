@@ -52,6 +52,10 @@ def _node_to_object(uuid_manager, node):
         return LoopCount(uuid_manager, node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__label:
         return Label(uuid_manager, node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__extFunc:
+        return ExternalFunction(uuid_manager, node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__extFuncArg:
+        return ExternalFunctionArg(uuid_manager, node)
 
     else:
         # raise node
@@ -162,7 +166,7 @@ class Node:
     def fill_graph(self, graph, namespace):
         if len(self._terminals) > 0:
             with graph.subgraph(name=self.name) as subgraph:
-                subgraph.attr(label=self.label, fillcolor=self._color, style="filled,solid")
+                subgraph.attr(label=self.label, fillcolor=self._color, style="filled,solid", rankdir="LR")
                 for terminal in self._terminals:
                     terminal.fill_graph(subgraph, namespace)
         else:
@@ -222,6 +226,7 @@ class Terminal(Node):
 
     def fill_graph(self, graph, namespace):
         # graph.node(name=self.name, label=type(self._impl).__name__)
+        print(self.name)
         self._impl.fill_graph(graph, namespace)
 
     @property
@@ -249,7 +254,7 @@ class Tunnel(Node):
         # if no or 1 terminal, maybe just make it a node
         if len(self._terminals) > 0:
             with graph.subgraph(name=self.name) as subgraph:
-                subgraph.attr(label=type(self).__name__)
+                subgraph.attr(label=type(self).__name__, rankdir="LR")
                 for terminal in self._terminals:
                 # name = f"<{str(terminal._uuid)}> Terminal"
                 # struct_info += name + " | "
@@ -305,7 +310,7 @@ class Structure(Node):
 
     def fill_graph(self, graph, namespace):
         with graph.subgraph(name="cluster" + str(self._uuid)) as subgraph:
-            subgraph.attr(label=type(self).__name__)
+            subgraph.attr(label=type(self).__name__, rankdir="LR")
             for diagram in self._diagrams:
                 diagram.fill_graph(subgraph, namespace)
             for terminal in self._terminals:
@@ -337,6 +342,9 @@ class Loop(Structure):
 
 class WhileLoop(Loop): pass
 class ForLoop(Loop): pass
+
+class ExternalFunction(Node): pass
+class ExternalFunctionArg(Tunnel): pass
 
 def iterate_direct_children(node):
     if node is None:
@@ -426,7 +434,7 @@ def get_dot_graph(file):
     diagram = uuid_manager.node_to_object(block_diagram_root)
     # diagram.resolve_weak_nodes()
     print(diagram)
-    g = graphviz.Digraph('G', engine='dot', format="svg", node_attr={"shape": "record"})
+    g = graphviz.Digraph('G', engine='dot', format="svg", node_attr={"shape": "record", "rankdir": "LR"})
     diagram.fill_graph(g)
     pprint(uuid_manager._uuids_to_obj)
     print(g.source)
