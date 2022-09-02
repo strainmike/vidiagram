@@ -24,6 +24,8 @@ def _node_to_object(uuid_manager, node):
         return WhileLoop(uuid_manager, node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__forLoop:
         return WhileLoop(uuid_manager, node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__select:
+        return CaseStructure(uuid_manager, node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__prim:
         return Primitive(uuid_manager, node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__bDConstDCO:
@@ -34,6 +36,10 @@ def _node_to_object(uuid_manager, node):
         return Terminal(uuid_manager, node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__lpTun:
         return LoopTunnel(uuid_manager, node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__selTun:
+        return SelectTunnel(uuid_manager, node)
+    if class_type == LVheap.SL_CLASS_TAGS.SL__caseSel:
+        return CaseSelect(uuid_manager, node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__parm:
         return Parameter(uuid_manager, node)
     if class_type == LVheap.SL_CLASS_TAGS.SL__overridableParm:
@@ -231,7 +237,7 @@ class Terminal(Node):
 
     __repr__ = __str__
 
-class LoopTunnel(Node):
+class Tunnel(Node):
     def __init__(self, uuid_manager, node):
         super().__init__(uuid_manager, node)
 
@@ -252,6 +258,9 @@ class LoopTunnel(Node):
         else:
             graph.node(name=self.name, label=type(self).__name__)
 
+class LoopTunnel(Tunnel): pass
+class SelectTunnel(Tunnel): pass
+class CaseSelect(Tunnel): pass
 
 class TerminalClass(Node):
     def __init__(self, uuid_manager, node):
@@ -290,11 +299,9 @@ class Structure(Node):
     def __init__(self, uuid_manager, node):
         super().__init__(uuid_manager, node)
         diagram_list = node.findChild(LVheap.OBJ_FIELD_TAGS.OF__diagramList)
-        diagram_list_size = diagram_list.attribs[LVheap.SL_SYSTEM_ATTRIB_TAGS.SL__elements.value]
         self._diagrams = []
-        for diagram_index in range(diagram_list_size):
-            raw_diagram = diagram_list.findChild(LVheap.SL_SYSTEM_TAGS.SL__arrayElement, diagram_index)
-            self._diagrams.append(uuid_manager.node_to_object(raw_diagram))
+        for diagram in iterate_direct_children(diagram_list):
+            self._diagrams.append(uuid_manager.node_to_object(diagram))
 
     def fill_graph(self, graph, namespace):
         with graph.subgraph(name="cluster" + str(self._uuid)) as subgraph:
@@ -309,6 +316,7 @@ class Structure(Node):
 
     __repr__ = __str__
 
+class CaseStructure(Structure): pass
 
 class LoopTest(TerminalClass):
     def __init__(self, uuid_manager, node):
