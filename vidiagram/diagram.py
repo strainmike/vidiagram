@@ -254,7 +254,7 @@ class Tunnel(Node):
                 # name = f"<{str(terminal._uuid)}> Terminal"
                 # struct_info += name + " | "
                     print(terminal)
-                    subgraph.node(name=terminal.name, label=type(terminal).__name__)
+                    subgraph.node(name=terminal.name, label=type(terminal).__name__, shape="point")
         else:
             graph.node(name=self.name, label=type(self).__name__)
 
